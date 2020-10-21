@@ -801,15 +801,12 @@ static void video_set_color_from_cursor(agi::Context *c, const char *tag, const 
 	agi::Color initial_color;
 	const auto active_line = c->selectionController->GetActiveLine();
 	const int sel_start = c->textSelectionController->GetSelectionStart();
-	const int sel_end = c->textSelectionController->GetSelectionStart();
 	const int norm_sel_start = normalize_pos(active_line->Text, sel_start);
 
 	auto const& sel = c->selectionController->GetSelectedSet();
 	using line_info = std::pair<agi::Color, parsed_line>;
 	std::vector<line_info> lines;
 	for (auto line : sel) {
-		AssStyle const* const style = c->ass->GetStyle(line->Style);
-
 		parsed_line parsed(line);
 		int blockn = parsed.block_at_pos(norm_sel_start);
 
