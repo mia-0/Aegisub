@@ -32,6 +32,8 @@
 #include "command.h"
 
 #include "../ass_dialogue.h"
+#include "../ass_file.h"
+#include "../ass_style.h"
 #include "../async_video_provider.h"
 #include "../compat.h"
 #include "../dialog_detached_video.h"
@@ -45,6 +47,7 @@
 #include "../options.h"
 #include "../project.h"
 #include "../selection_controller.h"
+#include "../text_selection_controller.h"
 #include "../utils.h"
 #include "../video_controller.h"
 #include "../video_display.h"
@@ -54,16 +57,20 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/util.h>
 
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
+#include <boost/range/adaptor/reversed.hpp>
+#include <boost/range/adaptor/sliced.hpp>
 #include <wx/msgdlg.h>
 #include <wx/textdlg.h>
 
 namespace {
 	using cmd::Command;
+	using namespace boost::adaptors;
 
 struct validator_video_loaded : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
@@ -627,6 +634,253 @@ struct video_play_line final : public validator_video_loaded {
 	}
 };
 
+struct parsed_line {
+	AssDialogue *line;
+	std::vector<std::unique_ptr<AssDialogueBlock>> blocks;
+
+	parsed_line(AssDialogue *line) : line(line), blocks(line->ParseTags()) { }
+	parsed_line(parsed_line&& r) = default;
+
+	const AssOverrideTag *find_tag(int blockn, std::string const& tag_name, std::string const& alt) const {
+		for (auto ovr : blocks | sliced(0, blockn + 1) | reversed | agi::of_type<AssDialogueBlockOverride>()) {
+			for (auto const& tag : ovr->Tags | reversed) {
+				if (tag.Name == tag_name || tag.Name == alt)
+					return &tag;
+			}
+		}
+		return nullptr;
+	}
+
+	template<typename T>
+	T get_value(int blockn, T initial, std::string const& tag_name, std::string const& alt = "") const {
+		auto tag = find_tag(blockn, tag_name, alt);
+		if (tag)
+			return tag->Params[0].template Get<T>(initial);
+		return initial;
+	}
+
+	int block_at_pos(int pos) const {
+		auto const& text = line->Text.get();
+		int n = 0;
+		int max = text.size() - 1;
+		bool in_block = false;
+
+		for (int i = 0; i <= max; ++i) {
+			if (text[i] == '{') {
+				if (!in_block && i > 0 && pos >= 0)
+					++n;
+				in_block = true;
+			}
+			else if (text[i] == '}' && in_block) {
+				in_block = false;
+				if (pos > 0 && (i + 1 == max || text[i + 1] != '{'))
+					n++;
+			}
+			else if (!in_block) {
+				if (--pos == 0)
+					return n + (i < max && text[i + 1] == '{');
+			}
+		}
+
+		return n - in_block;
+	}
+
+	int set_tag(std::string const& tag, std::string const& value, int norm_pos, int orig_pos) {
+		int blockn = block_at_pos(norm_pos);
+
+		AssDialogueBlockPlain *plain = nullptr;
+		AssDialogueBlockOverride *ovr = nullptr;
+		while (blockn >= 0 && !plain && !ovr) {
+			AssDialogueBlock *block = blocks[blockn].get();
+			switch (block->GetType()) {
+			case AssBlockType::PLAIN:
+				plain = static_cast<AssDialogueBlockPlain *>(block);
+				break;
+			case AssBlockType::DRAWING:
+				--blockn;
+				break;
+			case AssBlockType::COMMENT:
+				--blockn;
+				orig_pos = line->Text.get().rfind('{', orig_pos);
+				break;
+			case AssBlockType::OVERRIDE:
+				ovr = static_cast<AssDialogueBlockOverride*>(block);
+				break;
+			}
+		}
+
+		// If we didn't hit a suitable block for inserting the override just put
+		// it at the beginning of the line
+		if (blockn < 0)
+			orig_pos = 0;
+
+		std::string insert(tag + value);
+		int shift = insert.size();
+		if (plain || blockn < 0) {
+			line->Text = line->Text.get().substr(0, orig_pos) + "{" + insert + "}" + line->Text.get().substr(orig_pos);
+			shift += 2;
+			blocks = line->ParseTags();
+		}
+		else if (ovr) {
+			std::string alt;
+			if (tag == "\\c") alt = "\\1c";
+			// Remove old of same
+			bool found = false;
+			for (size_t i = 0; i < ovr->Tags.size(); i++) {
+				std::string const& name = ovr->Tags[i].Name;
+				if (tag == name || alt == name) {
+					shift -= ((std::string)ovr->Tags[i]).size();
+					if (found) {
+						ovr->Tags.erase(ovr->Tags.begin() + i);
+						i--;
+					}
+					else {
+						ovr->Tags[i].Params[0].Set(value);
+						found = true;
+					}
+				}
+			}
+			if (!found)
+				ovr->AddTag(insert);
+
+			line->UpdateText(blocks);
+		}
+		else
+			assert(false);
+
+		return shift;
+	}
+};
+
+int normalize_pos(std::string const& text, int pos) {
+	int plain_len = 0;
+	bool in_block = false;
+
+	for (int i = 0, max = text.size() - 1; i < pos && i <= max; ++i) {
+		if (text[i] == '{')
+			in_block = true;
+		if (!in_block)
+			++plain_len;
+		if (text[i] == '}' && in_block)
+			in_block = false;
+	}
+
+	return plain_len;
+}
+
+template<typename Func>
+void update_lines(const agi::Context *c, wxString const& undo_msg, Func&& f) {
+	const auto active_line = c->selectionController->GetActiveLine();
+	const int sel_start = c->textSelectionController->GetSelectionStart();
+	const int sel_end = c->textSelectionController->GetSelectionEnd();
+	const int norm_sel_start = normalize_pos(active_line->Text, sel_start);
+	const int norm_sel_end = normalize_pos(active_line->Text, sel_end);
+	int active_sel_shift = 0;
+
+	for (const auto line : c->selectionController->GetSelectedSet()) {
+		int shift = f(line, sel_start, sel_end, norm_sel_start, norm_sel_end);
+		if (line == active_line)
+			active_sel_shift = shift;
+	}
+
+	auto const& sel = c->selectionController->GetSelectedSet();
+	c->ass->Commit(undo_msg, AssFile::COMMIT_DIAG_TEXT, -1, sel.size() == 1 ? *sel.begin() : nullptr);
+	if (active_sel_shift != 0)
+		c->textSelectionController->SetSelection(sel_start + active_sel_shift, sel_end + active_sel_shift);
+}
+
+static void video_set_color_from_cursor(agi::Context *c, const char *tag, const char *alt) {
+	Vector2D coords = c->videoDisplay->GetMousePosition();
+	wxImage img = get_image(c, false);
+	agi::Color new_color(
+		img.GetRed(coords.X(), coords.Y()),
+		img.GetGreen(coords.X(), coords.Y()),
+		img.GetBlue(coords.X(), coords.Y())
+	);
+
+	agi::Color initial_color;
+	const auto active_line = c->selectionController->GetActiveLine();
+	const int sel_start = c->textSelectionController->GetSelectionStart();
+	const int sel_end = c->textSelectionController->GetSelectionStart();
+	const int norm_sel_start = normalize_pos(active_line->Text, sel_start);
+
+	auto const& sel = c->selectionController->GetSelectedSet();
+	using line_info = std::pair<agi::Color, parsed_line>;
+	std::vector<line_info> lines;
+	for (auto line : sel) {
+		AssStyle const* const style = c->ass->GetStyle(line->Style);
+
+		parsed_line parsed(line);
+		int blockn = parsed.block_at_pos(norm_sel_start);
+
+		agi::Color color = parsed.get_value(blockn, color, tag, alt);
+
+		if (line == active_line)
+			initial_color = color;
+
+		lines.emplace_back(color, std::move(parsed));
+	}
+
+	int active_shift = 0;
+	int commit_id = -1;
+	{
+		for (auto& line : lines) {
+			int shift = line.second.set_tag(tag, new_color.GetAssOverrideFormatted(), norm_sel_start, sel_start);
+
+			if (line.second.line == active_line)
+				active_shift = shift;
+		}
+
+		commit_id = c->ass->Commit(_("set color"), AssFile::COMMIT_DIAG_TEXT, commit_id, sel.size() == 1 ? *sel.begin() : nullptr);
+		if (active_shift)
+			c->textSelectionController->SetSelection(sel_start + active_shift, sel_start + active_shift);
+	}
+}
+
+struct video_set_color_primary final : public validator_video_loaded {
+	CMD_NAME("video/frame/set_color_primary")
+	STR_MENU("Set primary fill color")
+	STR_DISP("Set primary fill color")
+	STR_HELP("Sets the primary fill color (\\c) at the text cursor position from the pixel at the mouse cursor position")
+
+	void operator()(agi::Context *c) override {
+		video_set_color_from_cursor(c, "\\c", "\\1c");
+	}
+};
+
+struct video_set_color_secondary final : public validator_video_loaded {
+	CMD_NAME("video/frame/set_color_secondary")
+	STR_MENU("Set secondary fill color")
+	STR_DISP("Set secondary fill color")
+	STR_HELP("Sets the secondary fill color (\\2c) at the text cursor position from the pixel at the mouse cursor position")
+
+	void operator()(agi::Context *c) override {
+		video_set_color_from_cursor(c, "\\2c", "");
+	}
+};
+
+struct video_set_color_outline final : public validator_video_loaded {
+	CMD_NAME("video/frame/set_color_outline")
+	STR_MENU("Set outline color")
+	STR_DISP("Set outline color")
+	STR_HELP("Sets the outline color (\\3c) at the text cursor position from the pixel at the mouse cursor position")
+
+	void operator()(agi::Context *c) override {
+		video_set_color_from_cursor(c, "\\3c", "");
+	}
+};
+
+struct video_set_color_shadow final : public validator_video_loaded {
+	CMD_NAME("video/frame/set_color_shadow")
+	STR_MENU("Set shadow color")
+	STR_DISP("Set shadow color")
+	STR_HELP("Sets the shadow color (\\4c) at the text cursor position from the pixel at the mouse cursor position")
+
+	void operator()(agi::Context *c) override {
+		video_set_color_from_cursor(c, "\\4c", "");
+	}
+};
+
 struct video_show_overscan final : public validator_video_loaded {
 	CMD_NAME("video/show_overscan")
 	STR_MENU("Show &Overscan Mask")
@@ -769,6 +1023,10 @@ namespace cmd {
 		reg(agi::make_unique<video_opt_autoscroll>());
 		reg(agi::make_unique<video_play>());
 		reg(agi::make_unique<video_play_line>());
+		reg(agi::make_unique<video_set_color_primary>());
+		reg(agi::make_unique<video_set_color_secondary>());
+		reg(agi::make_unique<video_set_color_outline>());
+		reg(agi::make_unique<video_set_color_shadow>());
 		reg(agi::make_unique<video_show_overscan>());
 		reg(agi::make_unique<video_stop>());
 		reg(agi::make_unique<video_zoom_100>());

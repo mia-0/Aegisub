@@ -213,6 +213,11 @@
         { "command" : "app/log" }
     ],
     "video_context" : [
+        { "command" : "video/frame/set_color_primary"},
+        { "command" : "video/frame/set_color_secondary"},
+        { "command" : "video/frame/set_color_outline"},
+        { "command" : "video/frame/set_color_shadow"},
+        {},
         { "command" : "video/frame/save" },
         { "command" : "video/frame/copy" },
         {},
