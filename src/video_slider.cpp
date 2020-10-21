@@ -184,7 +184,7 @@ void VideoSlider::OnPaint(wxPaintEvent &) {
 	GetClientSize(&w, &h);
 
 	// Colors
-	wxColour shad = wxSystemSettings::GetColour(wxSYS_COLOUR_3DDKSHADOW);
+	wxColour shad = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
 	wxColour high = wxSystemSettings::GetColour(wxSYS_COLOUR_3DLIGHT);
 	wxColour face = wxSystemSettings::GetColour(wxSYS_COLOUR_3DFACE);
 	wxColour sel(123,251,232);
