@@ -157,7 +157,7 @@ bool VisualToolRotateXY::InitializeHold() {
 }
 
 void VisualToolRotateXY::UpdateHold() {
-	Vector2D delta = (mouse_pos - drag_start) * 2;
+	Vector2D delta = (mouse_pos - drag_start) / 4;
 	if (shift_down)
 		delta = delta.SingleAxis();
 
