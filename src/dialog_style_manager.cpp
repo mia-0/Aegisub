@@ -253,9 +253,7 @@ void add_styles(Func1 name_checker, Func2 style_adder) {
 }
 
 int confirm_delete(int n, wxWindow *parent, wxString const& title) {
-	return wxMessageBox(
-		fmt_plural(n, "Are you sure you want to delete this style?", "Are you sure you want to delete these %d styles?", n),
-		title, wxYES_NO | wxICON_EXCLAMATION, parent);
+	return wxYES;
 }
 
 int get_single_sel(wxListBox *lb) {
@@ -515,10 +513,8 @@ void DialogStyleManager::OnCopyToStorage() {
 		wxString styleName = CurrentList->GetString(selections[i]);
 
 		if (AssStyle *style = Store.GetStyle(from_wx(styleName))) {
-			if (wxYES == wxMessageBox(fmt_tl("There is already a style with the name \"%s\" in the current storage. Overwrite?", styleName), _("Style name collision"), wxYES_NO)) {
-				*style = *styleMap.at(selections[i]);
-				copied.push_back(styleName);
-			}
+			*style = *styleMap.at(selections[i]);
+			copied.push_back(styleName);
 		}
 		else {
 			Store.push_back(agi::make_unique<AssStyle>(*styleMap.at(selections[i])));
@@ -542,10 +538,8 @@ void DialogStyleManager::OnCopyToCurrent() {
 		wxString styleName = StorageList->GetString(selections[i]);
 
 		if (AssStyle *style = c->ass->GetStyle(from_wx(styleName))) {
-			if (wxYES == wxMessageBox(fmt_tl("There is already a style with the name \"%s\" in the current script. Overwrite?", styleName), _("Style name collision"), wxYES_NO)) {
-				*style = *Store[selections[i]];
-				copied.push_back(styleName);
-			}
+			*style = *Store[selections[i]];
+			copied.push_back(styleName);
 		}
 		else {
 			c->ass->Styles.push_back(*new AssStyle(*Store[selections[i]]));

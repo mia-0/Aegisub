@@ -253,7 +253,7 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 		}
 	}
 	catch (agi::fs::FileNotFound const& e) {
-		return ShowError(_("The audio file was not found: ") + to_wx(e.GetMessage()));
+		return;
 	}
 	catch (agi::AudioDataNotFound const& e) {
 		if (quiet) {
@@ -295,7 +295,6 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 	catch (agi::UserCancelException const&) { return false; }
 	catch (agi::fs::FileSystemError const& err) {
 		config::mru->Remove("Video", path);
-		ShowError(to_wx(err.GetMessage()));
 		return false;
 	}
 	catch (VideoProviderError const& err) {
