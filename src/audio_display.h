@@ -127,6 +127,9 @@ class AudioDisplay: public wxWindow {
 	/// Zoom level given as a number, see SetZoomLevel for details
 	int zoom_level;
 
+	/// Time since last mouse event
+	long last_event = 0;
+
 	/// Absolute pixel position of the tracking cursor (mouse or playback)
 	int track_cursor_pos = -1;
 	/// Label to show by track cursor
