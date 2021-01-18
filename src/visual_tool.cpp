@@ -165,7 +165,10 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 	// very expensive, and aegisub’s work queue handling is bad,
 	// so limit mouse event rate to ~200 Hz
 	long ts = event.GetTimestamp();
-	if ((ts - lastEvent) < 5) return;
+	if (!event.IsButton() && (ts - lastEvent) < 5) {
+		event.Skip();
+		return;
+	}
 	lastEvent = ts;
 
 	bool left_click = event.LeftDown();

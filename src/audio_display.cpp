@@ -1047,7 +1047,10 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 	// very expensive, and aegisub’s work queue handling is bad,
 	// so limit mouse event rate to ~200 Hz
 	long ts = event.GetTimestamp();
-	if ((ts - last_event) < 5) return;
+	if (!event.IsButton() && (ts - last_event) < 5) {
+		event.Skip();
+		return;
+	}
 	last_event = ts;
 
 	// If we have focus, we get mouse move events on Mac even when the mouse is
