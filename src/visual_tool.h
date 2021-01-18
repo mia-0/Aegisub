@@ -92,6 +92,7 @@ protected:
 	bool holding = false; ///< Is a hold currently in progress?
 	AssDialogue *active_line = nullptr; ///< Active dialogue line; nullptr if it is not visible on the current frame
 	bool dragging = false; ///< Is a drag currently in progress?
+	long lastEvent = 0;
 
 	int frame_number; ///< Current frame number
 

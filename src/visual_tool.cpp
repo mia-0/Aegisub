@@ -161,6 +161,13 @@ VisualTool<FeatureType>::VisualTool(VideoDisplay *parent, agi::Context *context)
 
 template<class FeatureType>
 void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
+	// wx doesn’t throttle for us, updating the video view is
+	// very expensive, and aegisub’s work queue handling is bad,
+	// so limit mouse event rate to ~200 Hz
+	long ts = event.GetTimestamp();
+	if ((ts - lastEvent) < 5) return;
+	lastEvent = ts;
+
 	bool left_click = event.LeftDown();
 	bool left_double = event.LeftDClick();
 	shift_down = event.ShiftDown();
